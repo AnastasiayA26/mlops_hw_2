@@ -55,7 +55,7 @@
 
 ### Запуск
 ```bash
-git clone https://github.com/hedanta/mts25_mlops_hw2
+git clone https://github.com/AnastasiayA26/mlops_hw_2
 ```
 В склонированной директории:
 ```
