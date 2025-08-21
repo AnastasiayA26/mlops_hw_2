@@ -1,0 +1,6 @@
+.venv
+*.DS_Store
+*.csv
+*/input
+*/output
+*/train_data
