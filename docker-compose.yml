@@ -1,8 +1,7 @@
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.0
-    networks:
-      - ml-scorer
+    networks: [ ml-scorer ]
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -13,8 +12,7 @@ services:
     image: confluentinc/cp-kafka:7.3.0
     depends_on:
       - zookeeper
-    networks:
-      - ml-scorer
+    networks: [ ml-scorer ]
     ports:
       - "9095:9095"
     environment:
@@ -24,7 +22,7 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"  # Отключаем автосоздание топиков
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     healthcheck:
       test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9095", "--list"]
       interval: 5s
@@ -36,8 +34,7 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    networks:
-      - ml-scorer
+    networks: [ ml-scorer ]
     restart: on-failure
     entrypoint: [ "/bin/bash", "-c" ]
     command: |
@@ -49,18 +46,17 @@ services:
 
       echo 'Создание топиков...'
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic transactions --partitions 3 --replication-factor 1 --config retention.ms=604800000
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic scoring --partitions 3 --replication-factor 1 --config retention.ms=604800000
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic scoring      --partitions 3 --replication-factor 1 --config retention.ms=604800000
 
       echo 'Топики успешно созданы:'
       kafka-topics --bootstrap-server kafka:9092 --list
       "
-  
+
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     depends_on:
       - kafka
-    networks:
-      - ml-scorer
+    networks: [ ml-scorer ]
     ports:
       - "8080:8080"
     environment:
@@ -68,31 +64,98 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
 
+  postgres:
+      build:
+        context: ./bd
+        dockerfile: Dockerfile
+      container_name: ml-postgres
+      networks: [ ml-scorer ]
+      environment:
+        POSTGRES_DB: ml
+        POSTGRES_USER: ml
+        POSTGRES_PASSWORD: ml
+      volumes:
+        - pgdata:/var/lib/postgresql/data
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U ml -d ml"]
+        interval: 5s
+        timeout: 3s
+        retries: 20
+      ports:
+        - "5432:5432"
+
+  scoring-consumer:
+    build:
+      context: ./scoring_consumer
+      dockerfile: Dockerfile
+    command: python app.py
+    networks: [ ml-scorer ]
+    environment:
+      # Kafka
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      KAFKA_SCORING_TOPIC: "transactions"
+      KAFKA_GROUP_ID: "scoring-consumer"
+      # Postgres
+      DATABASE_URL: postgresql://ml:ml@postgres:5432/ml
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ml
+      DB_USER: ml
+      DB_PASS: ml
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   fraud_detector:
-    build: 
+    build:
       context: ./fraud_detector
       dockerfile: Dockerfile
-    networks:
-      - ml-scorer
+    networks: [ ml-scorer ]
     environment:
+      # Kafka
       KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
       KAFKA_TRANSACTIONS_TOPIC: "transactions"
       KAFKA_SCORING_TOPIC: "scoring"
+      # Postgres — даём и URL, и раздельные части на всякий случай
+      DATABASE_URL: postgresql://ml:ml@postgres:5432/ml
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ml
+      DB_USER: ml
+      DB_PASS: ml
     depends_on:
-      - kafka
-      - kafka-setup
+      kafka:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
   interface:
-    build: 
+    build:
       context: ./interface
       dockerfile: Dockerfile
-    networks:
-      - ml-scorer
+    networks: [ ml-scorer ]
     environment:
       KAFKA_BROKERS: "kafka:9092"
       KAFKA_TOPIC: "transactions"
+      # доступ к БД из интерфейса (если нужно читать витрину)
+      DATABASE_URL: postgresql://ml:ml@postgres:5432/ml
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ml
+      DB_USER: ml
+      DB_PASS: ml
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     ports:
       - "8501:8501"
 
@@ -100,3 +163,6 @@ networks:
   ml-scorer:
     name: ml-scorer
     driver: bridge
+
+volumes:
+  pgdata:

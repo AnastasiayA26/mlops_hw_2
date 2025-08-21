@@ -1,10 +1,13 @@
 import streamlit as st
 import pandas as pd
 from kafka import KafkaProducer
+import psycopg2
+import matplotlib.pyplot as plt
 import json
 import time
 import os
 import uuid
+import numpy as np
 
 # Конфигурация Kafka
 KAFKA_CONFIG = {
@@ -100,3 +103,93 @@ if st.session_state.uploaded_files:
                             st.rerun()
                 else:
                     st.error("Файл не содержит данных")
+
+
+st.divider()
+st.header("Посмотреть результаты")
+
+DB_URL = os.getenv("DATABASE_URL", "postgresql://ml:ml@postgres:5432/ml")
+
+def read_sql_df(query: str) -> pd.DataFrame:
+    """Простой helper: открыть соединение → прочитать → закрыть"""
+    conn = None
+    try:
+        conn = psycopg2.connect(DB_URL)
+        df = pd.read_sql(query, conn)
+        return df
+    finally:
+        if conn is not None:
+            conn.close()
+
+if st.button("Посмотреть результаты", type="primary"):
+    # 1) 10 последних транзакций с fraud_flag = 1
+    st.subheader("Последние 10 транзакций с fraud_flag = 1")
+    try:
+        fraud_df = read_sql_df(
+            """
+            SELECT transaction_id, score, fraud_flag, created_at
+            FROM public.score_events
+            WHERE fraud_flag = TRUE
+            ORDER BY created_at DESC
+            LIMIT 10;
+            """
+        )
+        if fraud_df.empty:
+            st.info("Записей с fraud_flag=1 пока нет.")
+        else:
+            st.dataframe(fraud_df, use_container_width=True)
+    except Exception as e:
+        st.error(f"Ошибка запроса к БД (fraud list): {e}")
+
+    # 2) Гистограмма скоров последних 100 ТРАНЗАКЦИЙ
+    st.subheader("Гистограмма скоров последних 100 транзакций")
+    try:
+        scores_df = read_sql_df(
+            """
+            WITH latest_per_tx AS (
+              SELECT DISTINCT ON (transaction_id)
+                     transaction_id, score, created_at
+              FROM public.score_events
+              ORDER BY transaction_id, created_at DESC
+            )
+            SELECT score, created_at
+            FROM latest_per_tx
+            ORDER BY created_at DESC
+            LIMIT 100;
+            """
+        )
+
+        if scores_df.empty:
+            st.info("Недостаточно данных для построения гистограммы.")
+        else:
+
+            values = scores_df["score"].dropna().values
+            mean_val = values.mean()
+            med_val = np.median(values)
+
+            fig, ax = plt.subplots(figsize=(8, 4))
+            # гистограмма
+            ax.hist(
+                values,
+                bins=20,
+                color="#5B8FF9",       
+                edgecolor="#1F3B73",   
+                alpha=0.85,
+                label="Распределение score",
+            )
+            ax.axvline(mean_val, linestyle="--", linewidth=2, color="#FF7C43",
+                    label=f"Среднее = {mean_val:.3f}")
+            ax.axvline(med_val, linestyle="-.", linewidth=2, color="#F95D6A",
+                    label=f"Медиана = {med_val:.3f}")
+
+            ax.set_title("Гистограмма предсказанных score")
+            ax.set_xlabel("score")
+            ax.set_ylabel("количество")
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="best")
+            plt.tight_layout()
+            st.pyplot(fig, clear_figure=True)
+    except Exception as e:
+        st.error(f"Ошибка запроса к БД (hist): {e}")
+else:
+    st.caption("Загрузить результаты из базы.")
