@@ -91,6 +91,9 @@ docker-compose up --build
 ## Структура проекта
 ```
 .
+├── bd/
+│   ├── 001_init.sql
+│   └── Dockerfile
 ├── fraud_detector/
 │   ├── app/
 │   │   ├── __init__.py
@@ -106,6 +109,10 @@ docker-compose up --build
 │   └── Dockerfile
 ├── interface/
 │   ├── app.py   # Streamlit UI
+│   ├── requirements.txt
+│   └── Dockerfile
+├── scoring_consumer/
+│   ├── app.py   
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── docker-compose.yaml
